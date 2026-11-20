@@ -2475,81 +2475,112 @@ std::vector<ChVector3d> ChFsiFluidSystemSPH::CreatePointsMesh(ChTriangleMeshConn
 
     const double EPSI = 1e-6;
 
-    ChVector3d ray_origin;
-    for (double x = bbox.min.x(); x < bbox.max.x(); x += spacing) {
-        ray_origin.x() = x + 1e-9;
-        for (double y = bbox.min.y(); y < bbox.max.y(); y += spacing) {
-            ray_origin.y() = y + 1e-9;
-            for (double z = bbox.min.z(); z < bbox.max.z(); z += spacing) {
-                ray_origin.z() = z + 1e-9;
+    // Count grid points using the same bounds as the original nested loops, then
+    // flatten them to a single index.  Each index is independent, which lets
+    // OpenMP execute the ray tests in parallel without changing the result.
+    int Nx = 0;
+    for (double x = bbox.min.x(); x < bbox.max.x(); x += spacing)
+        ++Nx;
+    int Ny = 0;
+    for (double y = bbox.min.y(); y < bbox.max.y(); y += spacing)
+        ++Ny;
+    int Nz = 0;
+    for (double z = bbox.min.z(); z < bbox.max.z(); z += spacing)
+        ++Nz;
 
-                ChVector3d ray_dir[2] = {ChVector3d(5, 0.5, 0.25), ChVector3d(-3, 0.7, 10)};
-                int intersectCounter[2] = {0, 0};
+    const int num_points = Nx * Ny * Nz;
+    std::vector<unsigned char> inside(static_cast<size_t>(num_points), 0);
 
-                for (unsigned int i = 0; i < mesh.m_face_v_indices.size(); ++i) {
-                    auto& t_face = mesh.m_face_v_indices[i];
-                    auto& v1 = mesh.m_vertices[t_face.x()];
-                    auto& v2 = mesh.m_vertices[t_face.y()];
-                    auto& v3 = mesh.m_vertices[t_face.z()];
+#pragma omp parallel for schedule(dynamic, 64)
+    for (int idx = 0; idx < num_points; ++idx) {
+        const int ix = idx / (Ny * Nz);
+        const int iy = (idx / Nz) % Ny;
+        const int iz = idx % Nz;
 
-                    // Find vectors for two edges sharing V1
-                    auto edge1 = v2 - v1;
-                    auto edge2 = v3 - v1;
+        ChVector3d ray_origin(bbox.min.x() + ix * spacing + 1e-9, bbox.min.y() + iy * spacing + 1e-9,
+                              bbox.min.z() + iz * spacing + 1e-9);
 
-                    int t_inter[2] = {0, 0};
+        ChVector3d ray_dir[2] = {ChVector3d(5, 0.5, 0.25), ChVector3d(-3, 0.7, 10)};
+        int intersectCounter[2] = {0, 0};
 
-                    for (unsigned int j = 0; j < 2; j++) {
-                        // Begin calculating determinant - also used to calculate uu parameter
-                        auto pvec = Vcross(ray_dir[j], edge2);
-                        // if determinant is near zero, ray is parallel to plane of triangle
-                        double det = Vdot(edge1, pvec);
-                        // NOT CULLING
-                        if (det > -EPSI && det < EPSI) {
-                            t_inter[j] = 0;
-                            continue;
-                        }
-                        double inv_det = 1.0 / det;
+        for (unsigned int i = 0; i < mesh.m_face_v_indices.size(); ++i) {
+            auto& t_face = mesh.m_face_v_indices[i];
+            auto& v1 = mesh.m_vertices[t_face.x()];
+            auto& v2 = mesh.m_vertices[t_face.y()];
+            auto& v3 = mesh.m_vertices[t_face.z()];
 
-                        // calculate distance from V1 to ray origin
-                        auto tvec = ray_origin - v1;
+            // Find vectors for two edges sharing V1
+            auto edge1 = v2 - v1;
+            auto edge2 = v3 - v1;
 
-                        /// Calculate uu parameter and test bound
-                        double uu = Vdot(tvec, pvec) * inv_det;
-                        // The intersection lies outside of the triangle
-                        if (uu < 0.0 || uu > 1.0) {
-                            t_inter[j] = 0;
-                            continue;
-                        }
+            int t_inter[2] = {0, 0};
 
-                        // Prepare to test vv parameter
-                        auto qvec = Vcross(tvec, edge1);
+            for (unsigned int j = 0; j < 2; j++) {
+                // Begin calculating determinant - also used to calculate uu parameter
+                auto pvec = Vcross(ray_dir[j], edge2);
+                // if determinant is near zero, ray is parallel to plane of triangle
+                double det = Vdot(edge1, pvec);
+                // NOT CULLING
+                if (det > -EPSI && det < EPSI) {
+                    t_inter[j] = 0;
+                    continue;
+                }
+                double inv_det = 1.0 / det;
 
-                        // Calculate vv parameter and test bound
-                        double vv = Vdot(ray_dir[j], qvec) * inv_det;
-                        // The intersection lies outside of the triangle
-                        if (vv < 0.0 || ((uu + vv) > 1.0)) {
-                            t_inter[j] = 0;
-                            continue;
-                        }
+                // calculate distance from V1 to ray origin
+                auto tvec = ray_origin - v1;
 
-                        double tt = Vdot(edge2, qvec) * inv_det;
-                        if (tt > EPSI) {  /// ray intersection
-                            t_inter[j] = 1;
-                            continue;
-                        }
-
-                        // No hit, no win
-                        t_inter[j] = 0;
-                    }
-
-                    intersectCounter[0] += t_inter[0];
-                    intersectCounter[1] += t_inter[1];
+                /// Calculate uu parameter and test bound
+                double uu = Vdot(tvec, pvec) * inv_det;
+                // The intersection lies outside of the triangle
+                if (uu < 0.0 || uu > 1.0) {
+                    t_inter[j] = 0;
+                    continue;
                 }
 
-                if (((intersectCounter[0] % 2) == 1) && ((intersectCounter[1] % 2) == 1))  // inside mesh
-                    points.push_back(ChVector3d(x, y, z));
+                // Prepare to test vv parameter
+                auto qvec = Vcross(tvec, edge1);
+
+                // Calculate vv parameter and test bound
+                double vv = Vdot(ray_dir[j], qvec) * inv_det;
+                // The intersection lies outside of the triangle
+                if (vv < 0.0 || ((uu + vv) > 1.0)) {
+                    t_inter[j] = 0;
+                    continue;
+                }
+
+                double tt = Vdot(edge2, qvec) * inv_det;
+                if (tt > EPSI) {  /// ray intersection
+                    t_inter[j] = 1;
+                    continue;
+                }
+
+                // No hit, no win
+                t_inter[j] = 0;
             }
+
+            intersectCounter[0] += t_inter[0];
+            intersectCounter[1] += t_inter[1];
         }
+
+        if (((intersectCounter[0] % 2) == 1) && ((intersectCounter[1] % 2) == 1))  // inside mesh
+            inside[idx] = 1;
+    }
+
+    // Flatten serially so BCE ordering remains identical to the original loops.
+    size_t num_inside = 0;
+    for (int idx = 0; idx < num_points; ++idx)
+        num_inside += inside[idx] ? 1 : 0;
+    points.reserve(num_inside);
+
+    for (int idx = 0; idx < num_points; ++idx) {
+        if (!inside[idx])
+            continue;
+        const int ix = idx / (Ny * Nz);
+        const int iy = (idx / Nz) % Ny;
+        const int iz = idx % Nz;
+        points.emplace_back(bbox.min.x() + ix * spacing, bbox.min.y() + iy * spacing,
+                            bbox.min.z() + iz * spacing);
     }
 
     return points;
