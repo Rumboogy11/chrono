@@ -1224,6 +1224,7 @@ __global__ void CrmCalcRHS_D(const Real4* __restrict__ sortedPosRad,
     Real nabla_r = 0;
     Real w_ini_inv = 1 / W3h(kernelType, d0, ooh);
     Real max_vel_diff = 0;
+    int n_fluid = 0;
 
     // Get the interaction from neighbor particles
     // NLStart + 1 because the first element in neighbor list is the particle itself
@@ -1238,6 +1239,8 @@ __global__ void CrmCalcRHS_D(const Real4* __restrict__ sortedPosRad,
         Real3 posRadB = mR3(sortedPosRad[j]);
         Real3 dist3 = Distance(posRadA, posRadB);
         Real d = length(dist3);
+        if (d <= Real(1e-12))
+            continue;
         Real invd = 1 / d;
         Real3 velMasB = sortedVelMas[j];
         Real3 TauXxYyZzB = sortedTauXxYyZz[j];
@@ -1251,6 +1254,10 @@ __global__ void CrmCalcRHS_D(const Real4* __restrict__ sortedPosRad,
         // Uses neighbor volume approximation markerMass / rho_j
         if (d > paramsD.h * 1.0e-9f)
             nabla_r += volumej * dot(-dist3, gradW);
+
+        // Count fluid neighbors so BCE markers without fluid support can be zeroed below.
+        if (IsFluidParticle(rhoPresMuB.w))
+            n_fluid++;
 
         // Calculate dv/dt
         // Note: The SPH discretization chosen for gradW does not support the use of consistent discretization
@@ -1273,55 +1280,65 @@ __global__ void CrmCalcRHS_D(const Real4* __restrict__ sortedPosRad,
         }
     }
 
-    // Split into D and W
-    Real Dxx = Lxx;
-    Real Dyy = Lyy;
-    Real Dzz = Lzz;
-    Real Dxy = 0.5 * (Lxy + Lyx);
-    Real Dxz = 0.5 * (Lxz + Lzx);
-    Real Dyz = 0.5 * (Lyz + Lzy);
-    Real Wxy = 0.5 * (Lxy - Lyx);
-    Real Wxz = 0.5 * (Lxz - Lzx);
-    Real Wyz = 0.5 * (Lyz - Lzy);
+    if (is_fluid_particle) {
+        // Split into D and W
+        Real Dxx = Lxx;
+        Real Dyy = Lyy;
+        Real Dzz = Lzz;
+        Real Dxy = 0.5 * (Lxy + Lyx);
+        Real Dxz = 0.5 * (Lxz + Lzx);
+        Real Dyz = 0.5 * (Lyz + Lzy);
+        Real Wxy = 0.5 * (Lxy - Lyx);
+        Real Wxz = 0.5 * (Lxz - Lzx);
+        Real Wyz = 0.5 * (Lyz - Lzy);
 
-    Real trD = Dxx + Dyy + Dzz;
-    Real edia = 1.0f / 3.0f * trD;
-    Real twoG = 0;
-    Real threeK = 0;
-    if (paramsD.rheology_model_crm == RheologyCRM::MCC) {
-        // Save the volumetric strain to use in constitutive model (MCC only)
-        sortedPcEvSv[index].y = -trD;
-        Real p_n = -CH_1_3 * (tauxx + tauyy + tauzz);
+        Real trD = Dxx + Dyy + Dzz;
+        Real edia = 1.0f / 3.0f * trD;
+        Real twoG = 0;
+        Real threeK = 0;
+        if (paramsD.rheology_model_crm == RheologyCRM::MCC) {
+            // Save the volumetric strain to use in constitutive model (MCC only)
+            sortedPcEvSv[index].y = -trD;
+            Real p_n = -CH_1_3 * (tauxx + tauyy + tauzz);
 
-        // Floor Pressure (Pa) to prevent K -> 0 near free surface
-        // Real p_eff = fmax(p_n, Real(1000.0));
-        Real p_eff = p_n;
+            // Floor Pressure (Pa) to prevent K -> 0 near free surface
+            // Real p_eff = fmax(p_n, Real(1000.0));
+            Real p_eff = p_n;
 
-        // Candidate bulk modulus from MCC
-        Real K_cand = sortedPcEvSv[index].z * (p_eff) / paramsD.mcc_kappa;
-        // Clamp K to prevent collapse of the bulk modulus
-        Real K_clamped = fmin(fmax(K_cand, Real(0.1) * paramsD.K_bulk), Real(1.0) * paramsD.K_bulk);
+            // Candidate bulk modulus from MCC
+            Real K_cand = sortedPcEvSv[index].z * (p_eff) / paramsD.mcc_kappa;
+            // Clamp K to prevent collapse of the bulk modulus
+            Real K_clamped = fmin(fmax(K_cand, Real(0.1) * paramsD.K_bulk), Real(1.0) * paramsD.K_bulk);
 
-        // Shear
-        Real G_cand = (3.0 * K_clamped * (1.0 - 2.0 * paramsD.Nu_poisson)) / (2.0 * (1.0 + paramsD.Nu_poisson));
-        Real G_clamped = fmin(fmax(G_cand, Real(0.1) * paramsD.G_shear), Real(1.0) * paramsD.G_shear);
+            // Shear
+            Real G_cand = (3.0 * K_clamped * (1.0 - 2.0 * paramsD.Nu_poisson)) / (2.0 * (1.0 + paramsD.Nu_poisson));
+            Real G_clamped = fmin(fmax(G_cand, Real(0.1) * paramsD.G_shear), Real(1.0) * paramsD.G_shear);
 
-        twoG = 2 * G_clamped;
-        threeK = 3 * K_clamped;
+            twoG = 2 * G_clamped;
+            threeK = 3 * K_clamped;
+        } else {
+            twoG = 2 * paramsD.G_shear;
+            threeK = 3 * paramsD.K_bulk;
+        }
+
+        // Final stress rate using isotropic elasticity
+        Real dTauxx = twoG * (Dxx - edia) + 2.0 * (tauxy * Wxy + tauxz * Wxz) + threeK * edia;
+        Real dTauyy = twoG * (Dyy - edia) - 2.0 * (tauxy * Wxy - tauyz * Wyz) + threeK * edia;
+        Real dTauzz = twoG * (Dzz - edia) - 2.0 * (tauxz * Wxz + tauyz * Wyz) + threeK * edia;
+
+        // off-diagonals
+        Real dTauxy = twoG * Dxy - (tauxx * Wxy - tauxz * Wyz) + (Wxy * tauyy + Wxz * tauyz);
+        Real dTauxz = twoG * Dxz - (tauxx * Wxz + tauxy * Wyz) + (Wxy * tauyz + Wxz * tauzz);
+        Real dTauyz = twoG * Dyz - (tauxy * Wxz + tauyy * Wyz) - (Wxy * tauxz - Wyz * tauzz);
+
+        sortedDerivTauXxYyZz[index] = mR3(dTauxx, dTauyy, dTauzz);
+        sortedDerivTauXyXzYz[index] = mR3(dTauxy, dTauxz, dTauyz);
     } else {
-        twoG = 2 * paramsD.G_shear;
-        threeK = 3 * paramsD.K_bulk;
+        // Boundary marker state (including flex FSI markers) is set by BC extrapolation;
+        // do not evolve constitutive stress rates here.
+        sortedDerivTauXxYyZz[index] = mR3(0);
+        sortedDerivTauXyXzYz[index] = mR3(0);
     }
-
-    // Final stress rate using isotropic elasticity
-    Real dTauxx = twoG * (Dxx - edia) + 2.0 * (tauxy * Wxy + tauxz * Wxz) + threeK * edia;
-    Real dTauyy = twoG * (Dyy - edia) - 2.0 * (tauxy * Wxy - tauyz * Wyz) + threeK * edia;
-    Real dTauzz = twoG * (Dzz - edia) - 2.0 * (tauxz * Wxz + tauyz * Wyz) + threeK * edia;
-
-    // off-diagonals
-    Real dTauxy = twoG * Dxy - (tauxx * Wxy - tauxz * Wyz) + (Wxy * tauyy + Wxz * tauyz);
-    Real dTauxz = twoG * Dxz - (tauxx * Wxz + tauxy * Wyz) + (Wxy * tauyz + Wxz * tauzz);
-    Real dTauyz = twoG * Dyz - (tauxy * Wxz + tauyy * Wyz) - (Wxy * tauxz - Wyz * tauzz);
 
     // Identify free-surface particles using the divergence of the position field.
     // The divergence itself is also stored, so that the shifting kernel can consume it
@@ -1332,6 +1349,12 @@ __global__ void CrmCalcRHS_D(const Real4* __restrict__ sortedPosRad,
     if (!IsFinite(derivVelRho)) {
         printf("ERROR (CrmCalcRHS_D): particle derivVelRho is NaN.\n");
         *error_flag = true;
+    }
+
+    // For BCE markers (including flexible FSI boundaries), require reliable fluid
+    // neighborhood support before using SPH RHS as a force/acceleration source.
+    if (!is_fluid_particle && n_fluid == 0) {
+        derivVelRho = mR4(0);
     }
 
     // Add gravity and other body force to fluid markers
@@ -1348,8 +1371,6 @@ __global__ void CrmCalcRHS_D(const Real4* __restrict__ sortedPosRad,
     }
 
     sortedDerivVelRho[index] = derivVelRho;
-    sortedDerivTauXxYyZz[index] = mR3(dTauxx, dTauyy, dTauzz);
-    sortedDerivTauXyXzYz[index] = mR3(dTauxy, dTauxz, dTauyz);
 }
 
 void SphForceWCSPH::CrmCalcRHS(std::shared_ptr<SphMarkerDataD> sortedSphMarkersD) {

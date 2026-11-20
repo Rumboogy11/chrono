@@ -22,6 +22,9 @@
 
 #include <type_traits>
 #include <fstream>
+#include <cstdlib>
+#include <cmath>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 
