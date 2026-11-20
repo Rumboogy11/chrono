@@ -22,6 +22,9 @@
 
 #include <type_traits>
 #include <fstream>
+#include <cstdlib>
+#include <cmath>
+#include <iostream>
 
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/reduce.h>
