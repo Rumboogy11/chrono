@@ -3,6 +3,7 @@
 #=============================================================================
 
 option(CH_ENABLE_MODULE_VEHICLE "Enable the Chrono Vehicle module" OFF)
+option(CHRONO_VEHICLE_CRM_ONLY "Build only the Chrono::Vehicle terrain classes needed by CRM" OFF)
 
 # Return now if this module is not enabled
 if(NOT CH_ENABLE_MODULE_VEHICLE)
@@ -943,6 +944,39 @@ set(DEPENDENCIES_VEHICLE ${DEPENDENCIES_VEHICLE} PARENT_SCOPE)
 # ----------------------------------------------------------------------------
 # Add the Chrono_vehicle library
 # ----------------------------------------------------------------------------
+
+if(CHRONO_VEHICLE_CRM_ONLY)
+  # The CRM/SPH drivers only construct CRMTerrain. Drop wheeled/tracked vehicle,
+  # vehicle-model, driver, and utility sources so neither the C++ library nor
+  # the Python wrapper pulls in unused Eigen-heavy translation units.
+  set(CV_CHASSIS_FILES "")
+  set(CV_DRIVER_FILES "")
+  set(CV_POVERTRAIN_FILES "")
+  set(CV_UTILS_FILES "")
+  set(CV_WV_BASE_FILES "")
+  set(CV_WV_ANTIROLL_FILES "")
+  set(CV_WV_BRAKE_FILES "")
+  set(CV_WV_DRIVELINE_FILES "")
+  set(CV_WV_STEERING_FILES "")
+  set(CV_WV_SUBCHASSIS_FILES "")
+  set(CV_WV_SUSPENSION_FILES "")
+  set(CV_WV_TEST_RIG_FILES "")
+  set(CV_WV_TIRE_FILES "")
+  set(CV_WV_VEHICLE_FILES "")
+  set(CV_WV_WHEEL_FILES "")
+  set(CV_TV_BASE_FILES "")
+  set(CV_TV_BRAKE_FILES "")
+  set(CV_TV_DRIVELINE_FILES "")
+  set(CV_TV_IDLER_FILES "")
+  set(CV_TV_TRACKWHEEL_FILES "")
+  set(CV_TV_SPROCKET_FILES "")
+  set(CV_TV_SUSPENSION_FILES "")
+  set(CV_TV_TRACKSHOE_FILES "")
+  set(CV_TV_TRACKASSEMBLY_FILES "")
+  set(CV_TV_TEST_RIG_FILES "")
+  set(CV_TV_UTILS_FILES "")
+  set(CV_TV_VEHICLE_FILES "")
+endif()
 
 message(STATUS "Add Chrono_vehicle library")
 
