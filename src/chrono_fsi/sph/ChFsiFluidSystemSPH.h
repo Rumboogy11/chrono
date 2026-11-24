@@ -172,6 +172,8 @@ class CH_FSI_API ChFsiFluidSystemSPH : public ChFsiFluidSystem {
     /// Set computational domain and boundary conditions on its sides.
     /// `bc_type` indicates the types of BCs imposed in the three directions of the computational domain.
     /// By default, no special boundary conditions are imposed in any direction (BCType::NONE).
+    /// A periodic direction of the domain must be at least 3 kernel support radii long, and any other direction at least 1.
+    /// Initialize() throws for a shorter domain.
     /// \note After Initialize(), only a pure TRANSLATION of the domain is accepted
     /// (same extents; the 2-argument overload additionally requires unchanged BC
     /// types); the update propagates to the device (used by the CRMTerrain moving
@@ -393,6 +395,17 @@ class CH_FSI_API ChFsiFluidSystemSPH : public ChFsiFluidSystem {
     /// Return the fluid properties of the markers in the specified group.
     /// For each marker, the 3-dimensional vector contains density, pressure, and viscosity.
     std::vector<ChVector3d> GetParticleFluidProperties(MarkerGroup group = MarkerGroup::ALL) const;
+
+    /// Return the diagonal stress components (xx, yy, zz) of the markers in the specified group (CRM only).
+    /// These are components of the Cauchy stress in the global frame; normal stress is positive in tension. For a BCE
+    /// marker, this is the stress that the boundary condition extrapolated from the neighboring SPH particles during the
+    /// last step, or zero if the marker had no SPH neighbors.
+    std::vector<ChVector3d> GetParticleStressDiagonal(MarkerGroup group = MarkerGroup::ALL) const;
+
+    /// Return the off-diagonal stress components (xy, xz, yz) of the markers in the specified group (CRM only).
+    /// A positive xy component is a traction along +x on a face with normal +y. BCE markers are treated as in
+    /// GetParticleStressDiagonal.
+    std::vector<ChVector3d> GetParticleStressOffDiagonal(MarkerGroup group = MarkerGroup::ALL) const;
 
     /// Return the boundary treatment type.
     BoundaryMethod GetBoundaryType() const { return m_paramsH->boundary_method; }
@@ -691,6 +704,7 @@ class CH_FSI_API ChFsiFluidSystemSPH : public ChFsiFluidSystem {
 
   private:
     /// Derive the domain-dependent grid quantities from the current computational domain.
+    /// Throws if the domain is too short along an axis for the neighbor-search grid.
     void DeriveDomainGridQuantities();
 
     /// Apply a post-initialization computational-domain update (translation only) and
