@@ -865,7 +865,7 @@ endif()
 # MODULE for the vehicle python wrapper.
 #-----------------------------------------------------------------------------
 
-if(CH_ENABLE_MODULE_VEHICLE AND CH_ENABLE_MODULE_VEHICLE_MODELS)
+if(CH_ENABLE_MODULE_VEHICLE)
 
   message(STATUS "Add python VEHICLE module")
 
@@ -881,7 +881,7 @@ if(CH_ENABLE_MODULE_VEHICLE AND CH_ENABLE_MODULE_VEHICLE_MODELS)
   endif()
 
   swig_add_library(${CHPY_VEHICLE} LANGUAGE python SOURCES ${CHPY_VEHICLE_MODULE_FILE})
-  target_link_libraries(${CHPY_VEHICLE} PRIVATE Python3::Python Chrono_core Chrono_vehicle ChronoModels_vehicle)
+  target_link_libraries(${CHPY_VEHICLE} PRIVATE Python3::Python Chrono_core Chrono_vehicle)
 
   if(CH_ENABLE_MODULE_IRRLICHT)
     find_package(Irrlicht QUIET REQUIRED)
@@ -937,7 +937,6 @@ if(CH_ENABLE_MODULE_VEHICLE AND CH_ENABLE_MODULE_VEHICLE_MODELS)
   if(CH_ENABLE_MODULE_IRRLICHT)
     add_dependencies(${CHPY_VEHICLE} Chrono_irrlicht)
   endif()
-  add_dependencies(${CHPY_VEHICLE} ChronoModels_vehicle)
   add_dependencies(${CHPY_VEHICLE} core)
 
   # Copy PY file in a package dir

@@ -36,6 +36,12 @@
 // Parse the header file to generate wrappers
 %include "../../../chrono/core/ChTensors.h"
 
+// Expose the native von Mises formula that the SWIG parser skips in ChTensors.h.
+%extend chrono::ChStressTensor<double> {
+	public:
+		double VonMises() const { return $self->GetEquivalentVonMises(); }
+	};
+
 // Tensors are templated by type
 %template(ChStressTensorD) chrono::ChStressTensor<double>;
 %template(ChStrainEngTensorD) chrono::ChStrainTensor<double>;
